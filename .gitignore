@@ -1,0 +1,39 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.egg-info/
+data/raw/olist/*.csv
+data/local_lake/
+airflow-logs/
+*.zip
+.idea/
+.vscode/
+# Environment and secrets
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/
+
+# Python and test artifacts
+venv/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs and generated files
+*.log
+logs/
+dist/
+build/
+
+# Local datasets and generated data
+data/raw/olist/*
+!data/raw/olist/README.md
+data/local_lake/
+# Python package build metadata
+*.egg-info/

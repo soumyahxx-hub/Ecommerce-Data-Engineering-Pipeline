@@ -1,0 +1,120 @@
+name: ecom-dw
+
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+  PYTHONPATH: /opt/airflow/src
+  PROJECT_ROOT: /opt/airflow
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
+  S3_ENDPOINT_URL: http://rustfs:9000
+  S3_BUCKET: ${S3_BUCKET:-ecom-lake}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+  RAW_DATA_DIR: /opt/airflow/data/raw/olist
+  LOOKBACK_DAYS: ${LOOKBACK_DAYS:-7}
+  DQ_MAX_REJECT_PCT: ${DQ_MAX_REJECT_PCT:-5}
+  FX_API_URL: ${FX_API_URL:-https://api.frankfurter.dev/v1}
+  ENABLE_REDSHIFT: "false"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports: [ "5432:5432" ]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      retries: 20
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports: [ "9000:9000", "9001:9001" ]
+    volumes: [ rustfsdata:/data ]
+    healthcheck:
+      test: [ "CMD", "curl", "-sf", "http://127.0.0.1:9000/health/ready" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  rustfs-init:
+    image: public.ecr.aws/aws-cli/aws-cli:latest
+    depends_on:
+      rustfs: { condition: service_healthy }
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      S3_BUCKET: ${S3_BUCKET:-ecom-lake}
+    entrypoint: [ "/bin/sh", "-c" ]
+    # A list keeps this entire script as the one argument expected by /bin/sh -c.
+    command:
+      - |
+        set -eu
+        aws configure set default.s3.addressing_style path
+        for attempt in $$(seq 1 30); do
+          if aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket "$$S3_BUCKET" >/dev/null 2>&1; then
+            echo "Bucket $$S3_BUCKET already exists."
+            exit 0
+          fi
+          if aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket "$$S3_BUCKET" >/dev/null 2>&1; then
+            echo "Bucket $$S3_BUCKET created."
+            exit 0
+          fi
+          sleep 2
+        done
+        echo >&2 "Unable to create or confirm bucket $$S3_BUCKET after 30 attempts."
+        exit 1
+
+  airflow:
+    build: { context: ., dockerfile: docker/Dockerfile.airflow }
+    depends_on:
+      postgres: { condition: service_healthy }
+      rustfs-init: { condition: service_completed_successfully }
+    environment: *airflow-env
+    ports: [ "8080:8080" ]
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./sql:/opt/airflow/sql
+      - ./data/raw:/opt/airflow/data/raw
+      - ./airflow-logs:/opt/airflow/logs
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create --username ${AIRFLOW_ADMIN_USER:-admin} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname a --lastname d --role Admin --email admin@example.com || true;
+               airflow scheduler & exec airflow webserver"
+
+  metabase:
+    # optional BI: docker compose --profile bi up -d
+    image: metabase/metabase:latest
+    profiles: [ "bi" ]
+    ports: [ "3000:3000" ]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  rustfsdata:
