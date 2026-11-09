@@ -54,7 +54,7 @@ def get_settings() -> Settings:
         pg_host=e("POSTGRES_HOST", "localhost"),
         pg_port=int(e("POSTGRES_PORT", "5432")),
         pg_db=e("POSTGRES_DB", "ecom_dw"),
-        pg_user=e("POSTGRES_USER", "ecom"),
+        pg_user=e("POSTGRES_USER", "s0umya404"),
         pg_password=e("POSTGRES_PASSWORD", ""),
         storage_backend=e("STORAGE_BACKEND", "s3").lower(),
         s3_endpoint_url=e("S3_ENDPOINT_URL") or None,
